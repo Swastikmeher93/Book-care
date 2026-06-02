@@ -17,19 +17,7 @@ class MyApp extends ConsumerWidget {
     final authState = ref.watch(authStateProvider);
 
     final goRouter = GoRouter(
-      redirect: (context, state) {
-        final loggingIn = state.uri.path == '/home';
-        final user = authState;
-        if (user == null) {
-          // not logged in
-          if (loggingIn) return null;
-          return '/login';
-        } else {
-          // logged in
-          if (loggingIn) return '/home';
-          return null;
-        }
-      },
+      initialLocation: '/home',
       routes: [
         GoRoute(path: '/login', builder: (context, state) => const LoginView()),
         GoRoute(
@@ -58,7 +46,11 @@ class MyApp extends ConsumerWidget {
           routes: [
             GoRoute(
               path: 'booking-confirmed',
-              builder: (context, state) => const BookingConfirmedView(),
+              builder: (context, state) {
+                final extra = state.extra as Map?;
+                final bookingData = extra?['booking'] as Map<String, dynamic>?;
+                return BookingConfirmedView(bookingData: bookingData);
+              },
             ),
           ],
         ),

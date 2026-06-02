@@ -1,4 +1,4 @@
-#!/Users/swastik/Projects/healthcare-backend/venv/bin/python3
+#!/Users/swastik/Projects/health_care/healthcare-backend/venv/bin/python3
 # -*- coding: utf-8 -*-
 import re
 import sys

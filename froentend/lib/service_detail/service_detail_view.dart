@@ -1,7 +1,11 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 
+import '../auth/api_config.dart';
 import '../cart/cart_controller.dart';
+import '../providers/patient_provider.dart';
 import '../services_card/services/services_controller.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -60,12 +64,124 @@ class _ServiceDetailViewState extends ConsumerState<ServiceDetailView> {
   int _selectedDateIndex = 0;
   int _selectedSlotIndex = -1; // none selected by default
 
+  bool _isLoadingSlots = false;
+  Set<String> _availableSlots24h = {};
+  Map<String, Map<String, String>> _caregiverBySlot24h = {}; // time24h -> {id: ..., name: ...}
+  String? _slotsErrorMessage;
+
   @override
   void initState() {
     super.initState();
     _timeSlots = _generateTimeSlots(intervalMinutes: 15);
     final today = DateTime.now();
     _dates = List.generate(14, (i) => today.add(Duration(days: i)));
+
+    // Fetch available slots for the initial date
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _fetchAvailableSlots();
+    });
+  }
+
+  Future<void> _fetchAvailableSlots() async {
+    setState(() {
+      _isLoadingSlots = true;
+      _slotsErrorMessage = null;
+      _selectedSlotIndex = -1; // Reset selection on date change
+    });
+
+    try {
+      final date = _dates[_selectedDateIndex];
+      final formattedDate = "${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
+      final serviceId = widget.service.id;
+
+      // Await patient profile sync completion to ensure we have the UUID
+      final patientProfile = await ref.read(patientProfileProvider.future);
+      final patientId = patientProfile?.id;
+
+      var urlString = '${ApiConfig.baseUrl}/slots/available?service_id=$serviceId&date=$formattedDate';
+      if (patientId != null) {
+        urlString += '&patient_id=$patientId';
+      }
+
+      final response = await http.get(Uri.parse(urlString)).timeout(const Duration(seconds: 10));
+      debugPrint('Available Slots API Response for $formattedDate: ${response.body}');
+      if (response.statusCode == 200) {
+        final List data = jsonDecode(response.body);
+        final available = <String>{};
+        final caregivers = <String, Map<String, String>>{};
+        for (var item in data) {
+          final t = item['time'] as String;
+          available.add(t);
+          final cg = item['caregiver'];
+          if (cg != null) {
+            caregivers[t] = {
+              'id': cg['id'] as String? ?? '',
+              'name': cg['name'] as String? ?? 'Assigned Staff',
+            };
+          }
+        }
+        if (mounted) {
+          setState(() {
+            _availableSlots24h = available;
+            _caregiverBySlot24h = caregivers;
+            _isLoadingSlots = false;
+          });
+        }
+      } else {
+        throw Exception('Failed to load slots: ${response.statusCode}');
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _slotsErrorMessage = 'Failed to load available slots';
+          _isLoadingSlots = false;
+        });
+      }
+    }
+  }
+
+  Set<int> _getUnavailableIndices() {
+    final unavailable = <int>{};
+    final cartItems = ref.watch(cartProvider);
+    final dateFormatted = _formatDate(_dates[_selectedDateIndex]);
+
+    for (var i = 0; i < _timeSlots.length; i++) {
+      final uiTime = _timeSlots[i];
+      final time24h = _to24h(uiTime);
+      
+      // If the slot is not available from the backend, mark it unavailable
+      if (!_availableSlots24h.contains(time24h)) {
+        unavailable.add(i);
+        continue;
+      }
+
+      // If the slot is already added to the user's cart, mark it unavailable
+      final isInCart = cartItems.any((item) =>
+          item.serviceId == widget.service.id &&
+          item.date == dateFormatted &&
+          item.time == uiTime);
+      if (isInCart) {
+        unavailable.add(i);
+      }
+    }
+    return unavailable;
+  }
+
+  String _to24h(String uiTime) {
+    final parts = uiTime.split(' ');
+    if (parts.length != 2) return uiTime;
+    final timeParts = parts[0].split(':');
+    if (timeParts.length != 2) return uiTime;
+    var hour = int.tryParse(timeParts[0]) ?? 0;
+    final minute = int.tryParse(timeParts[1]) ?? 0;
+    final period = parts[1].toUpperCase();
+
+    if (period == 'PM' && hour < 12) {
+      hour += 12;
+    } else if (period == 'AM' && hour == 12) {
+      hour = 0;
+    }
+    return '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
   }
 
   bool get _canAddToCart => _selectedSlotIndex != -1;
@@ -81,15 +197,20 @@ class _ServiceDetailViewState extends ConsumerState<ServiceDetailView> {
       );
       return;
     }
-    final date = _formatDate(_dates[_selectedDateIndex]);
+    final selectedDate = _dates[_selectedDateIndex];
+    final scheduledDate = "${selectedDate.year}-${selectedDate.month.toString().padLeft(2, '0')}-${selectedDate.day.toString().padLeft(2, '0')}";
     final time = _timeSlots[_selectedSlotIndex];
+    final startTime = _to24h(time);
 
     ref.read(cartProvider.notifier).add(
           CartItem(
+            serviceId: widget.service.id,
             title: widget.service.title,
             icon: widget.service.icon,
-            date: date,
+            date: _formatDate(selectedDate),
+            scheduledDate: scheduledDate,
             time: time,
+            startTime: startTime,
             room: widget.service.room,
             price: widget.service.price,
           ),
@@ -109,6 +230,13 @@ class _ServiceDetailViewState extends ConsumerState<ServiceDetailView> {
   @override
   Widget build(BuildContext context) {
     final service = widget.service;
+    
+    // Resolve caregiver for the selected slot dynamically, or fallback to service caregiver
+    final selectedSlotTime24h = _selectedSlotIndex != -1 ? _to24h(_timeSlots[_selectedSlotIndex]) : null;
+    final selectedCaregiver = selectedSlotTime24h != null ? _caregiverBySlot24h[selectedSlotTime24h] : null;
+    final staffName = selectedCaregiver?['name'] ?? service.staffName;
+    final staffAvatarSeed = selectedCaregiver?['id'] ?? service.staffAvatarSeed;
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -164,10 +292,12 @@ class _ServiceDetailViewState extends ConsumerState<ServiceDetailView> {
                 _DateStrip(
                   dates: _dates,
                   selectedIndex: _selectedDateIndex,
-                  onSelect: (i) => setState(() {
-                    _selectedDateIndex = i;
-                    _selectedSlotIndex = -1;
-                  }),
+                  onSelect: (i) {
+                    setState(() {
+                      _selectedDateIndex = i;
+                    });
+                    _fetchAvailableSlots();
+                  },
                 ),
                 const SizedBox(height: 28),
 
@@ -181,12 +311,39 @@ class _ServiceDetailViewState extends ConsumerState<ServiceDetailView> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                _TimeSlotsGrid(
-                  slots: _timeSlots,
-                  selectedIndex: _selectedSlotIndex,
-                  unavailableIndices: service.unavailableSlotIndices,
-                  onSelect: (i) => setState(() => _selectedSlotIndex = i),
-                ),
+                if (_isLoadingSlots)
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 30),
+                      child: CircularProgressIndicator(),
+                    ),
+                  )
+                else if (_slotsErrorMessage != null)
+                  Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        children: [
+                          Text(
+                            _slotsErrorMessage!,
+                            style: const TextStyle(color: Colors.red),
+                          ),
+                          const SizedBox(height: 8),
+                          ElevatedButton(
+                            onPressed: _fetchAvailableSlots,
+                            child: const Text('Retry'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                else
+                  _TimeSlotsGrid(
+                    slots: _timeSlots,
+                    selectedIndex: _selectedSlotIndex,
+                    unavailableIndices: _getUnavailableIndices(),
+                    onSelect: (i) => setState(() => _selectedSlotIndex = i),
+                  ),
                 const SizedBox(height: 28),
 
                 // Session details
@@ -199,7 +356,12 @@ class _ServiceDetailViewState extends ConsumerState<ServiceDetailView> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                _SessionDetailsCard(service: service),
+                _SessionDetailsCard(
+                  duration: service.duration,
+                  room: service.room,
+                  staffName: staffName,
+                  staffAvatarSeed: staffAvatarSeed,
+                ),
                 const SizedBox(height: 8),
               ],
             ),
@@ -470,8 +632,17 @@ class _TimeSlotsGrid extends StatelessWidget {
 // ── Session Details Card ──────────────────────────────────────────────────────
 
 class _SessionDetailsCard extends StatelessWidget {
-  const _SessionDetailsCard({required this.service});
-  final ServiceItem service;
+  const _SessionDetailsCard({
+    required this.duration,
+    required this.room,
+    required this.staffName,
+    required this.staffAvatarSeed,
+  });
+
+  final String duration;
+  final String room;
+  final String staffName;
+  final String staffAvatarSeed;
 
   @override
   Widget build(BuildContext context) {
@@ -502,7 +673,7 @@ class _SessionDetailsCard extends StatelessWidget {
                   color: Color(0xFF2F80FF), size: 20),
             ),
             label: 'Duration',
-            value: service.duration,
+            value: duration,
           ),
           const SizedBox(height: 16),
           _DetailRow(
@@ -517,13 +688,13 @@ class _SessionDetailsCard extends StatelessWidget {
                   color: Color(0xFF2F80FF), size: 20),
             ),
             label: 'Location',
-            value: service.room,
+            value: room,
           ),
           const SizedBox(height: 16),
           _DetailRow(
             leading: ClipOval(
               child: Image.network(
-                'https://i.pravatar.cc/40?u=${service.staffAvatarSeed}',
+                'https://i.pravatar.cc/40?u=$staffAvatarSeed',
                 width: 40,
                 height: 40,
                 fit: BoxFit.cover,
@@ -540,7 +711,7 @@ class _SessionDetailsCard extends StatelessWidget {
               ),
             ),
             label: 'Assigned Staff',
-            value: service.staffName,
+            value: staffName,
           ),
         ],
       ),

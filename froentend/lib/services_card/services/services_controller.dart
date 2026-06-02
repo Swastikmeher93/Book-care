@@ -1,83 +1,25 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:health_care/auth/api_config.dart';
+import 'package:http/http.dart' as http;
 
-final servicesProvider = Provider<List<ServiceItem>>((ref) {
-  return const [
-    ServiceItem(
-      title: 'Wound Dressing',
-      subtitle: 'Professional wound care at home',
-      description:
-          'Expert wound care delivered at home by trained nurses using sterile techniques and quality materials.',
-      price: 45,
-      rating: '4.8',
-      icon: Icons.grid_view_rounded,
-      room: 'Room 3, Floor 2',
-      duration: '30 mins',
-      staffName: 'Dr. Sarah Lee',
-      staffAvatarSeed: 'sarah-lee',
-      unavailableSlotIndices: {2, 7, 14, 22, 30},
-    ),
-    ServiceItem(
-      title: 'Physiotherapy Session',
-      subtitle: 'Recovery and mobility therapy',
-      description:
-          'Personalized rehabilitation and mobility therapy with certified specialists.',
-      price: 80,
-      rating: '4.9',
-      icon: Icons.show_chart,
-      room: 'Room 5, Floor 1',
-      duration: '45 mins',
-      staffName: 'Dr. James Okafor',
-      staffAvatarSeed: 'james-okafor',
-      unavailableSlotIndices: {3, 11, 18, 24, 33},
-    ),
-    ServiceItem(
-      title: 'Vaccination Visit',
-      subtitle: 'Immunisation and vaccine service',
-      description:
-          'Safe and quick immunisation service administered by licensed healthcare professionals.',
-      price: 35,
-      rating: '4.7',
-      icon: Icons.vaccines_outlined,
-      room: 'Room 1, Floor 2',
-      duration: '20 mins',
-      staffName: 'Dr. Priya Sharma',
-      staffAvatarSeed: 'priya-sharma',
-      unavailableSlotIndices: {1, 8, 16, 20, 28},
-    ),
-    ServiceItem(
-      title: 'General Checkup',
-      subtitle: 'Full body health assessment',
-      description:
-          'Comprehensive health assessment covering vitals, blood work review, and lifestyle consultation.',
-      price: 50,
-      rating: '4.7',
-      icon: Icons.health_and_safety_outlined,
-      room: 'Room 4, Floor 1',
-      duration: '60 mins',
-      staffName: 'Dr. Emily Chen',
-      staffAvatarSeed: 'emily-chen',
-      unavailableSlotIndices: {4, 9, 17, 23, 31},
-    ),
-    ServiceItem(
-      title: 'Dental Cleaning',
-      subtitle: 'Professional teeth cleaning',
-      description:
-          'Professional dental hygiene service including scaling, polishing, and oral health assessment.',
-      price: 40,
-      rating: '4.6',
-      icon: Icons.sentiment_satisfied_alt_outlined,
-      room: 'Room 2, Floor 3',
-      duration: '40 mins',
-      staffName: 'Dr. Mark Wilson',
-      staffAvatarSeed: 'mark-wilson',
-      unavailableSlotIndices: {5, 12, 19, 26, 32},
-    ),
-  ];
+/// Riverpod FutureProvider that fetches available services from FastAPI backend.
+final servicesProvider = FutureProvider<List<ServiceItem>>((ref) async {
+  final uri = Uri.parse('${ApiConfig.baseUrl}/services');
+  final response = await http.get(uri).timeout(const Duration(seconds: 10));
+
+  if (response.statusCode == 200) {
+    final List data = jsonDecode(response.body);
+    return data.map((json) => ServiceItem.fromJson(json)).toList();
+  } else {
+    throw Exception('Failed to load services from backend: ${response.statusCode}');
+  }
 });
 
 class ServiceItem {
   const ServiceItem({
+    required this.id,
     required this.title,
     required this.subtitle,
     required this.description,
@@ -91,6 +33,7 @@ class ServiceItem {
     required this.unavailableSlotIndices,
   });
 
+  final String id;
   final String title;
   final String subtitle;
   final String description;
@@ -104,4 +47,47 @@ class ServiceItem {
   final Set<int> unavailableSlotIndices;
 
   String get priceDisplay => '\$$price';
+
+  factory ServiceItem.fromJson(Map<String, dynamic> json) {
+    final caregiversList = json['caregivers'] as List?;
+    final firstCaregiverName = (caregiversList != null && caregiversList.isNotEmpty)
+        ? caregiversList[0]['name'] as String
+        : 'No staff assigned';
+    final firstCaregiverId = (caregiversList != null && caregiversList.isNotEmpty)
+        ? caregiversList[0]['id'] as String
+        : 'default-staff';
+
+    return ServiceItem(
+      id: json['id'] as String,
+      title: json['name'] as String,
+      subtitle: json['description'] != null
+          ? (json['description'] as String).split('\n')[0]
+          : 'Healthcare service',
+      description: json['description'] as String? ?? '',
+      price: (json['price'] as num).toInt(),
+      rating: '4.8', // Rating is not in database, fallback to a standard high rating
+      icon: _getIconForName(json['name'] as String),
+      room: json['location'] as String? ?? 'Clinic Room',
+      duration: '${json['duration_minutes']} mins',
+      staffName: firstCaregiverName,
+      staffAvatarSeed: firstCaregiverId,
+      unavailableSlotIndices: {}, // Loaded dynamically in detail view
+    );
+  }
+
+  static IconData _getIconForName(String name) {
+    final lower = name.toLowerCase();
+    if (lower.contains('wound') || lower.contains('dressing')) {
+      return Icons.grid_view_rounded;
+    } else if (lower.contains('physio') || lower.contains('therapy')) {
+      return Icons.show_chart;
+    } else if (lower.contains('vaccin') || lower.contains('immun')) {
+      return Icons.vaccines_outlined;
+    } else if (lower.contains('checkup') || lower.contains('assess')) {
+      return Icons.health_and_safety_outlined;
+    } else if (lower.contains('dental') || lower.contains('clean')) {
+      return Icons.sentiment_satisfied_alt_outlined;
+    }
+    return Icons.medical_services_outlined;
+  }
 }
