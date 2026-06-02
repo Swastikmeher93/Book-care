@@ -1,7 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:health_care/app.dart';
 
-import 'package:health_care/main.dart';
 
 void main() {
   testWidgets('shows the home services list', (WidgetTester tester) async {

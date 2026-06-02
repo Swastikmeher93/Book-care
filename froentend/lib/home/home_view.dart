@@ -3,16 +3,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../cart/cart_controller.dart';
-import '../cart/cart_view.dart';
-import '../service_detail/service_detail_view.dart';
 import '../services_card/services/services_controller.dart';
 import '../services_card/services_card.dart';
+import '../providers/patient_provider.dart';
+import '../providers/auth_provider.dart';
 
 class HomeView extends ConsumerWidget {
   const HomeView({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Watch patient profile so it is synced on home load
+    final patientProfileAsync = ref.watch(patientProfileProvider);
     final services = ref.watch(servicesProvider);
     final cartCount = ref.watch(cartProvider).length;
 
@@ -24,7 +26,7 @@ class HomeView extends ConsumerWidget {
       ),
       body: Column(
         children: [
-          _Header(),
+          const _Header(),
           Expanded(
             child: ListView(
               padding: const EdgeInsets.fromLTRB(16, 24, 16, 100),
@@ -38,18 +40,49 @@ class HomeView extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(height: 16),
-                ...services.map(
-                  (s) => Padding(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    child: ServicesCard(
-                      title: s.title,
-                      subtitle: s.subtitle,
-                      price: s.priceDisplay,
-                      rating: s.rating,
-                      icon: s.icon,
-                      onTap: () => context.push(
-                        '/home/service-detail',
-                        extra: {'service': s},
+                services.when(
+                  data: (items) => Column(
+                    children: items.map(
+                      (s) => Padding(
+                        padding: const EdgeInsets.only(bottom: 16),
+                        child: ServicesCard(
+                          title: s.title,
+                          subtitle: s.subtitle,
+                          price: s.priceDisplay,
+                          rating: s.rating,
+                          icon: s.icon,
+                          onTap: () => context.push(
+                            '/home/service-detail',
+                            extra: {'service': s},
+                          ),
+                        ),
+                      ),
+                    ).toList(),
+                  ),
+                  loading: () => const Center(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 40),
+                      child: CircularProgressIndicator(),
+                    ),
+                  ),
+                  error: (err, stack) => Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24.0),
+                      child: Column(
+                        children: [
+                          const Icon(Icons.error_outline, color: Colors.red, size: 40),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Error: $err',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.red),
+                          ),
+                          const SizedBox(height: 12),
+                          ElevatedButton(
+                            onPressed: () => ref.invalidate(servicesProvider),
+                            child: const Text('Retry'),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -130,10 +163,18 @@ class _CartFAB extends StatelessWidget {
 
 // ── Header ────────────────────────────────────────────────────────────────────
 
-class _Header extends StatelessWidget {
+class _Header extends ConsumerWidget {
+  const _Header();
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final top = MediaQuery.of(context).padding.top;
+    final patientAsync = ref.watch(patientProfileProvider);
+    final displayName = patientAsync.maybeWhen(
+      data: (profile) => profile != null ? profile.firstName : 'User',
+      orElse: () => 'User',
+    );
+
     return Container(
       padding: EdgeInsets.fromLTRB(20, top + 20, 20, 28),
       decoration: const BoxDecoration(
@@ -150,16 +191,16 @@ class _Header extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
-                      children: const [
+                      children: [
                         Text(
-                          'Hello, John ',
-                          style: TextStyle(
+                          'Hello, $displayName ',
+                          style: const TextStyle(
                             color: Colors.white,
                             fontSize: 24,
                             fontWeight: FontWeight.w800,
                           ),
                         ),
-                        Text('👋', style: TextStyle(fontSize: 22)),
+                        const Text('👋', style: TextStyle(fontSize: 22)),
                       ],
                     ),
                     const SizedBox(height: 4),
@@ -174,17 +215,41 @@ class _Header extends StatelessWidget {
                   ],
                 ),
               ),
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.25),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.person_outline,
-                  color: Colors.white,
-                  size: 22,
+              GestureDetector(
+                onTap: () {
+                  showDialog(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Sign Out'),
+                      content: const Text('Are you sure you want to sign out?'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('Cancel'),
+                        ),
+                        TextButton(
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            ref.read(authStateProvider.notifier).signOut();
+                          },
+                          child: const Text('Sign Out', style: TextStyle(color: Colors.red)),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+                child: Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.25),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.person_outline,
+                    color: Colors.white,
+                    size: 22,
+                  ),
                 ),
               ),
             ],

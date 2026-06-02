@@ -32,6 +32,23 @@ def _provision_patient_from_user(user: Any) -> Dict:
 
     meta: dict = getattr(user, "user_metadata", {}) or {}
     email      = user.email or meta.get("email", "")
+
+    # Self-healing: If a patient record with this email already exists but is not linked, link it.
+    if email:
+        from app.database import get_connection
+        from psycopg2.extras import RealDictCursor
+        with get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM patients WHERE email = %s;", (email,))
+                existing_email = cur.fetchone()
+                if existing_email:
+                    cur.execute(
+                        "UPDATE patients SET user_id = %s WHERE id = %s RETURNING *;",
+                        (user_id, existing_email["id"])
+                    )
+                    conn.commit()
+                    return {"user_id": user_id, "email": email, "status": "exists"}
+
     first_name = (
         meta.get("given_name")
         or (meta.get("full_name", "").split(" ")[0] if meta.get("full_name") else "")

@@ -2,17 +2,69 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import 'cart_controller.dart';
+import '../providers/patient_provider.dart';
 
 class BookingConfirmedView extends ConsumerWidget {
-  const BookingConfirmedView({super.key});
+  const BookingConfirmedView({super.key, this.bookingData});
+
+  final Map<String, dynamic>? bookingData;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final cartItems = ref.watch(cartProvider);
-    final subtotal = ref.watch(cartSubtotalProvider);
-    final serviceFee = ref.watch(cartServiceFeeProvider);
-    final total = ref.watch(cartTotalProvider);
+    if (bookingData == null) {
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text('Booking details not available.'),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () => context.go('/home'),
+                child: const Text('Back to Home'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final patientAsync = ref.watch(patientProfileProvider);
+    final firstName = patientAsync.maybeWhen(
+      data: (profile) => profile != null ? profile.firstName : 'User',
+      orElse: () => 'User',
+    );
+
+    final total = (bookingData?['total_price'] as num? ?? 0.0).toDouble();
+    final double serviceFee = total > 0 ? 8.0 : 0.0;
+    final double subtotal = total - serviceFee;
+
+    final List itemsList = bookingData?['items'] as List? ?? [];
+    final confirmedItems = itemsList.map((item) {
+      final serviceName = item['service_name'] as String? ?? 'Service';
+      final cgFirst = item['caregiver_first_name'] as String? ?? '';
+      final cgLast = item['caregiver_last_name'] as String? ?? '';
+      final caregiverName = cgFirst.isEmpty && cgLast.isEmpty
+          ? 'Assigned Staff'
+          : 'Dr. $cgFirst $cgLast';
+
+      final rawDate = item['scheduled_date'] as String? ?? '';
+      final rawTime = item['start_time'] as String? ?? '';
+
+      return _ConfirmedItem(
+        title: serviceName,
+        icon: _getIconForName(serviceName),
+        date: _formatScheduledDate(rawDate),
+        time: _formatStartTime(rawTime),
+        room: 'Clinic Room',
+        price: (item['price'] as num? ?? 0.0).toDouble(),
+        caregiverName: caregiverName,
+        caregiverId: item['caregiver_id'] as String? ?? '',
+      );
+    }).toList();
+
+    final orderId = bookingData?['id']?.toString() ?? 'CB-20847';
+    final displayOrderId = orderId.length > 8 ? orderId.substring(0, 8).toUpperCase() : orderId;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -21,7 +73,7 @@ class BookingConfirmedView extends ConsumerWidget {
         elevation: 0,
         surfaceTintColor: Colors.transparent,
         leading: GestureDetector(
-          onTap: () => context.pop(),
+          onTap: () => context.go('/home'),
           child: Container(
             margin: const EdgeInsets.all(8),
             decoration: const BoxDecoration(
@@ -76,10 +128,10 @@ class BookingConfirmedView extends ConsumerWidget {
           const SizedBox(height: 22),
 
           // ── Title ─────────────────────────────────────────────────────────
-          const Text(
-            "You're all set, John!",
+          Text(
+            "You're all set, $firstName!",
             textAlign: TextAlign.center,
-            style: TextStyle(
+            style: const TextStyle(
               fontSize: 22,
               fontWeight: FontWeight.w800,
               color: Color(0xFF111216),
@@ -107,12 +159,12 @@ class BookingConfirmedView extends ConsumerWidget {
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
-                children: const [
-                  Icon(Icons.tag, color: Color(0xFF2F80FF), size: 17),
-                  SizedBox(width: 6),
+                children: [
+                  const Icon(Icons.tag, color: Color(0xFF2F80FF), size: 17),
+                  const SizedBox(width: 6),
                   Text(
-                    'Order #CB-20847',
-                    style: TextStyle(
+                    'Order #$displayOrderId',
+                    style: const TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
                       color: Color(0xFF111216),
@@ -134,16 +186,16 @@ class BookingConfirmedView extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 14),
-          ...cartItems.map(
+          ...confirmedItems.map(
             (item) => Padding(
               padding: const EdgeInsets.only(bottom: 12),
-              child: _BookingCard(item: item),
+              child: _ConfirmedBookingCard(item: item),
             ),
           ),
           const SizedBox(height: 8),
 
           // ── Payment Summary ───────────────────────────────────────────────
-          _PaymentSummaryCard(
+          _ConfirmedPaymentSummaryCard(
             subtotal: subtotal,
             serviceFee: serviceFee,
             total: total,
@@ -203,12 +255,26 @@ class BookingConfirmedView extends ConsumerWidget {
               label: const Text('Download Receipt'),
             ),
           ),
+          const SizedBox(height: 12),
+
+          // ── Back to Home ──────────────────────────────────────────────────
+          TextButton(
+            onPressed: () => context.go('/home'),
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFF2F80FF),
+              textStyle: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            child: const Text('Back to Home'),
+          ),
           const SizedBox(height: 16),
 
           // ── Email confirmation ────────────────────────────────────────────
-          Row(
+          const Row(
             mainAxisAlignment: MainAxisAlignment.center,
-            children: const [
+            children: [
               Icon(Icons.shield_outlined, color: Color(0xFF9098A3), size: 16),
               SizedBox(width: 6),
               Text(
@@ -227,12 +293,32 @@ class BookingConfirmedView extends ConsumerWidget {
   }
 }
 
-// ── Booking Card ──────────────────────────────────────────────────────────────
+class _ConfirmedItem {
+  const _ConfirmedItem({
+    required this.title,
+    required this.icon,
+    required this.date,
+    required this.time,
+    required this.room,
+    required this.price,
+    required this.caregiverName,
+    required this.caregiverId,
+  });
 
-class _BookingCard extends StatelessWidget {
-  const _BookingCard({required this.item});
+  final String title;
+  final IconData icon;
+  final String date;
+  final String time;
+  final String room;
+  final double price;
+  final String caregiverName;
+  final String caregiverId;
+}
 
-  final CartItem item;
+class _ConfirmedBookingCard extends StatelessWidget {
+  const _ConfirmedBookingCard({required this.item});
+
+  final _ConfirmedItem item;
 
   @override
   Widget build(BuildContext context) {
@@ -248,7 +334,7 @@ class _BookingCard extends StatelessWidget {
           ),
         ],
       ),
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      padding: const EdgeInsets.all(14),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -280,12 +366,12 @@ class _BookingCard extends StatelessWidget {
                   children: [
                     _TimePill(time: item.time),
                     const SizedBox(width: 12),
-                    const Icon(Icons.location_on_outlined,
+                    const Icon(Icons.person_outline,
                         color: Color(0xFF9098A3), size: 14),
                     const SizedBox(width: 3),
                     Expanded(
                       child: Text(
-                        item.room,
+                        item.caregiverName,
                         style: const TextStyle(
                           fontSize: 12,
                           color: Color(0xFF9098A3),
@@ -300,7 +386,7 @@ class _BookingCard extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Text(
-            '\$${item.price}',
+            '\$${item.price.toInt()}',
             style: const TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w800,
@@ -313,18 +399,16 @@ class _BookingCard extends StatelessWidget {
   }
 }
 
-// ── Payment Summary ───────────────────────────────────────────────────────────
-
-class _PaymentSummaryCard extends StatelessWidget {
-  const _PaymentSummaryCard({
+class _ConfirmedPaymentSummaryCard extends StatelessWidget {
+  const _ConfirmedPaymentSummaryCard({
     required this.subtotal,
     required this.serviceFee,
     required this.total,
   });
 
-  final int subtotal;
-  final int serviceFee;
-  final int total;
+  final double subtotal;
+  final double serviceFee;
+  final double total;
 
   @override
   Widget build(BuildContext context) {
@@ -346,11 +430,11 @@ class _PaymentSummaryCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          _SummaryRow(label: 'Subtotal', value: '\$$subtotal', valueBold: false),
+          _SummaryRow(label: 'Subtotal', value: '\$${subtotal.toInt()}', valueBold: false),
           const SizedBox(height: 10),
-          _SummaryRow(label: 'Service Fee', value: '\$$serviceFee', valueBold: false),
+          _SummaryRow(label: 'Service Fee', value: '\$${serviceFee.toInt()}', valueBold: false),
           const SizedBox(height: 10),
-          _SummaryRow(
+          const _SummaryRow(
             label: 'Payment Method',
             value: 'Visa \u2022\u2022\u2022\u2022 4242',
             valueBold: false,
@@ -370,7 +454,7 @@ class _PaymentSummaryCard extends StatelessWidget {
                 ),
               ),
               Text(
-                '\$$total',
+                '\$${total.toInt()}',
                 style: const TextStyle(
                   fontSize: 17,
                   fontWeight: FontWeight.w800,
@@ -422,8 +506,6 @@ class _SummaryRow extends StatelessWidget {
   }
 }
 
-// ── Shared ────────────────────────────────────────────────────────────────────
-
 class _ServiceIconTile extends StatelessWidget {
   const _ServiceIconTile({required this.icon});
 
@@ -474,4 +556,58 @@ class _TimePill extends StatelessWidget {
       ),
     );
   }
+}
+
+const _fullDayNames = [
+  'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+  'Friday', 'Saturday', 'Sunday',
+];
+const _monthNames = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+String _formatDate(DateTime d) {
+  final day = _fullDayNames[d.weekday - 1];
+  final month = _monthNames[d.month - 1];
+  return '$day, ${d.day} $month ${d.year}';
+}
+
+String _formatScheduledDate(String dateStr) {
+  try {
+    final parsed = DateTime.parse(dateStr);
+    return _formatDate(parsed);
+  } catch (_) {
+    return dateStr;
+  }
+}
+
+String _formatStartTime(String timeStr) {
+  try {
+    final parts = timeStr.split(':');
+    if (parts.length < 2) return timeStr;
+    var hour = int.parse(parts[0]);
+    final minute = int.parse(parts[1]);
+    final period = hour < 12 ? 'AM' : 'PM';
+    final h = hour % 12 == 0 ? 12 : hour % 12;
+    return '${h.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')} $period';
+  } catch (_) {
+    return timeStr;
+  }
+}
+
+IconData _getIconForName(String name) {
+  final lower = name.toLowerCase();
+  if (lower.contains('wound') || lower.contains('dressing')) {
+    return Icons.grid_view_rounded;
+  } else if (lower.contains('physio') || lower.contains('therapy')) {
+    return Icons.show_chart;
+  } else if (lower.contains('vaccin') || lower.contains('immun')) {
+    return Icons.vaccines_outlined;
+  } else if (lower.contains('checkup') || lower.contains('assess')) {
+    return Icons.health_and_safety_outlined;
+  } else if (lower.contains('dental') || lower.contains('clean')) {
+    return Icons.sentiment_satisfied_alt_outlined;
+  }
+  return Icons.medical_services_outlined;
 }

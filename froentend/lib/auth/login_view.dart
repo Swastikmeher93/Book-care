@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:health_care/auth/auth_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 final loginControllerProvider = NotifierProvider<LoginController, LoginState>(
@@ -35,15 +37,50 @@ class LoginController extends Notifier<LoginState> {
     state = const LoginState(isSigningIn: true);
 
     try {
-      await Supabase.instance.client.auth.signInWithOAuth(OAuthProvider.google);
+      final googleSignIn = GoogleSignIn(
+        clientId: AuthConfig.googleAndroidClientId.isEmpty ||
+                AuthConfig.googleAndroidClientId.startsWith('YOUR_GOOGLE')
+            ? null
+            : AuthConfig.googleAndroidClientId,
+        serverClientId: AuthConfig.googleWebClientId.isEmpty ||
+                AuthConfig.googleWebClientId.startsWith('YOUR_GOOGLE')
+            ? null
+            : AuthConfig.googleWebClientId,
+      );
+
+      final googleUser = await googleSignIn.signIn();
+      if (googleUser == null) {
+        state = const LoginState();
+        return;
+      }
+
+      final googleAuth = await googleUser.authentication;
+      final idToken = googleAuth.idToken;
+      final accessToken = googleAuth.accessToken;
+
+      if (idToken == null) {
+        state = const LoginState(
+          errorMessage: 'Could not retrieve ID token from Google.',
+        );
+        return;
+      }
+
+      await Supabase.instance.client.auth.signInWithIdToken(
+        provider: OAuthProvider.google,
+        idToken: idToken,
+        accessToken: accessToken,
+      );
       state = const LoginState();
-    } catch (_) {
-      state = const LoginState(
-        errorMessage: 'Unable to start Google sign in. Please try again.',
+    } on AuthException catch (e) {
+      state = LoginState(errorMessage: e.message);
+    } catch (e) {
+      state = LoginState(
+        errorMessage: 'Google Sign-In failed: ${e.toString()}',
       );
     }
   }
 }
+
 
 class LoginView extends ConsumerWidget {
   const LoginView({super.key});
@@ -235,6 +272,7 @@ class _SignInCard extends StatelessWidget {
     );
   }
 }
+
 
 class _GoogleButton extends StatelessWidget {
   const _GoogleButton({required this.isLoading, required this.onPressed});

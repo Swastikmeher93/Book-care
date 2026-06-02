@@ -3,11 +3,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'cart_controller.dart';
+import '../providers/patient_provider.dart';
 
-class CartView extends ConsumerWidget {
+class CartView extends ConsumerStatefulWidget {
   const CartView({super.key});
 
-  void _showClearConfirm(BuildContext context, WidgetRef ref) {
+  @override
+  ConsumerState<CartView> createState() => _CartViewState();
+}
+
+class _CartViewState extends ConsumerState<CartView> {
+  bool _isCheckingOut = false;
+
+  void _showClearConfirm(BuildContext context) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -15,13 +23,13 @@ class CartView extends ConsumerWidget {
         content: const Text('Remove all items from your cart?'),
         actions: [
           TextButton(
-            onPressed: () => context.pop(),
+            onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancel'),
           ),
           TextButton(
             onPressed: () {
               ref.read(cartProvider.notifier).clear();
-              context.pop();
+              Navigator.pop(ctx);
             },
             child: const Text('Clear', style: TextStyle(color: Colors.red)),
           ),
@@ -30,12 +38,41 @@ class CartView extends ConsumerWidget {
     );
   }
 
+  Future<void> _handleCheckout(String patientId) async {
+    setState(() {
+      _isCheckingOut = true;
+    });
+
+    try {
+      final bookingResponse = await ref.read(cartProvider.notifier).checkout(patientId);
+      if (mounted) {
+        context.push('/cart/booking-confirmed', extra: {'booking': bookingResponse});
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.toString().replaceAll('Exception: ', '')),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        setState(() {
+          _isCheckingOut = false;
+        });
+      }
+    }
+  }
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final cartItems = ref.watch(cartProvider);
     final subtotal = ref.watch(cartSubtotalProvider);
     final serviceFee = ref.watch(cartServiceFeeProvider);
     final total = ref.watch(cartTotalProvider);
+    final patientProfileAsync = ref.watch(patientProfileProvider);
+
+    final patientId = patientProfileAsync.value?.id;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -73,21 +110,31 @@ class CartView extends ConsumerWidget {
         children: [
           if (cartItems.isEmpty)
             const Center(
-              child: Text(
-                'Your cart is empty',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w400,
-                  color: Color(0xFF9098A3),
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: 40),
+                child: Text(
+                  'Your cart is empty',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w400,
+                    color: Color(0xFF9098A3),
+                  ),
                 ),
               ),
             )
           else
-            ...cartItems.map(
-              (item) => Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: _CartCard(item: item),
-              ),
+            ...cartItems.asMap().entries.map(
+              (entry) {
+                final index = entry.key;
+                final item = entry.value;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _CartCard(
+                    item: item,
+                    onRemove: () => ref.read(cartProvider.notifier).remove(index),
+                  ),
+                );
+              },
             ),
           const SizedBox(height: 8),
           // ── Payment Summary ───────────────────────────────────────────────
@@ -102,9 +149,20 @@ class CartView extends ConsumerWidget {
             width: double.infinity,
             height: 52,
             child: FilledButton.icon(
-              onPressed: cartItems.isEmpty
+              onPressed: cartItems.isEmpty || _isCheckingOut
                   ? null
-                  : () => context.push('/cart/booking-confirmed'),
+                  : () {
+                      if (patientId == null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Patient profile not loaded yet. Please wait.'),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                        return;
+                      }
+                      _handleCheckout(patientId);
+                    },
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF2F80FF),
                 foregroundColor: Colors.white,
@@ -116,16 +174,25 @@ class CartView extends ConsumerWidget {
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              icon: const Icon(Icons.shopping_cart_outlined, size: 20),
-              label: const Text('Proceed to Checkout'),
+              icon: _isCheckingOut
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : const Icon(Icons.shopping_cart_outlined, size: 20),
+              label: Text(_isCheckingOut ? 'Processing Checkout...' : 'Proceed to Checkout'),
             ),
           ),
           const SizedBox(height: 12),
           // ── Clear Cart Button ─────────────────────────────────────────────
           TextButton(
-            onPressed: cartItems.isEmpty
+            onPressed: cartItems.isEmpty || _isCheckingOut
                 ? null
-                : () => _showClearConfirm(context, ref),
+                : () => _showClearConfirm(context),
             style: TextButton.styleFrom(
               foregroundColor: cartItems.isEmpty
                   ? const Color(0xFFADB5C4)
@@ -145,9 +212,10 @@ class CartView extends ConsumerWidget {
 
 // ── Cart Card ──────────────────────────────────────────────────────────────
 class _CartCard extends StatelessWidget {
-  const _CartCard({required this.item});
+  const _CartCard({required this.item, required this.onRemove});
 
   final CartItem item;
+  final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) {
@@ -214,13 +282,26 @@ class _CartCard extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          Text(
-            '\$${item.price}',
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
-              color: Color(0xFF2F80FF),
-            ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.delete_outline, color: Color(0xFFFF4D4F), size: 20),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onPressed: onRemove,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '\$${item.price}',
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF2F80FF),
+                ),
+              ),
+            ],
           ),
         ],
       ),

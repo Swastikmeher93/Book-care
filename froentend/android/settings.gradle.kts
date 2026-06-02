@@ -24,3 +24,6 @@ plugins {
 }
 
 include(":app")
+
+rootProject.name = "health_care_android"
+
