@@ -1,4 +1,4 @@
-# FamCARE Healthcare System
+# BookCARE
 
 A modern healthcare management application featuring a Flutter mobile client and a FastAPI local server backed by PostgreSQL/Supabase.
 
